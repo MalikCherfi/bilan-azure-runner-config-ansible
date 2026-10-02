@@ -31,6 +31,16 @@
       args:
         creates: /usr/bin/az
 
+    - name: Dépôt NodeSource (Node.js {{ node_major }}.x)
+      ansible.builtin.shell: curl -fsSL https://deb.nodesource.com/setup_{{ node_major }}.x | bash -
+      args:
+        creates: /etc/apt/sources.list.d/nodesource.sources
+
+    - name: Installer Node.js (requis par CodeQL pour TypeScript)
+      ansible.builtin.apt:
+        name: nodejs
+        state: present
+
     - name: Utilisateur dédié au runner
       ansible.builtin.user:
         name: "{{ runner_user }}"
