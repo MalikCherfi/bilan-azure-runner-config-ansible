@@ -11,8 +11,13 @@
   tasks:
     - name: Paquets de base
       ansible.builtin.apt:
-        name: [curl, tar, jq, git, ca-certificates, azcli]
+        name: [curl, tar, jq, git, ca-certificates]
         update_cache: true
+
+    - name: Installer Azure CLI
+      ansible.builtin.shell: curl -sL https://aka.ms/InstallAzureCLIDeb | bash
+      args:
+        creates: /usr/bin/az
 
     - name: Utilisateur dédié au runner
       ansible.builtin.user:
