@@ -39,7 +39,7 @@
 
     - name: Installer Node.js (requis par CodeQL pour TypeScript)
       ansible.builtin.apt:
-        name: nodejs
+        name: [docker.io, docker-buildx]
         state: present
 
     - name: Installer Docker (build, Trivy, ZAP)
@@ -58,6 +58,9 @@
         name: "{{ runner_user }}"
         shell: /bin/bash
         create_home: true
+        groups: docker
+        append: true
+      notify: Redémarrer le runner
 
     - name: Dossier du runner
       ansible.builtin.file:
