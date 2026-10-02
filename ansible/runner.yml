@@ -6,6 +6,7 @@
     runner_dir: /opt/actions-runner
     runner_name: pipeline-runner
     runner_labels: "azure,front"
+    node_major: "24"
     github_pat: "{{ lookup('env', 'GITHUB_PAT') }}"
 
   tasks:
