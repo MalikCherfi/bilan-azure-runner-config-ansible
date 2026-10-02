@@ -11,7 +11,7 @@
   tasks:
     - name: Paquets de base
       ansible.builtin.apt:
-        name: [curl, tar, jq, git, ca-certificates]
+        name: [curl, tar, jq, git, ca-certificates, acl]
         update_cache: true
 
     - name: Installer Azure CLI
