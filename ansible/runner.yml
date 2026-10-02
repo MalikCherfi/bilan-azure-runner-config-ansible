@@ -10,9 +10,10 @@
     github_pat: "{{ lookup('env', 'GITHUB_PAT') }}"
 
   tasks:
+    # ---------- Système et outils ----------
     - name: Paquets de base
       ansible.builtin.apt:
-        name: [curl, tar, jq, git, ca-certificates, acl]
+        name: [curl, tar, jq, git, ca-certificates, acl] # acl : requis pour become_user
         update_cache: true
 
     - name: Outils requis par les workflows CI
@@ -21,9 +22,9 @@
           - build-essential # modules npm natifs (node-gyp)
           - python3
           - python3-pip
-          - unzip # extraction des binaires téléchargés par les actions (nuclei, etc.)
+          - unzip # extraction des binaires téléchargés par les actions
           - zip
-          - zstd # actions/cache (sinon repli gzip lent) et bundle CodeQL
+          - zstd # actions/cache et bundle CodeQL
           - xz-utils
         state: present
 
@@ -32,19 +33,21 @@
       args:
         creates: /usr/bin/az
 
+    # ---------- Node.js (CodeQL, TypeScript) ----------
     - name: Dépôt NodeSource (Node.js {{ node_major }}.x)
       ansible.builtin.shell: curl -fsSL https://deb.nodesource.com/setup_{{ node_major }}.x | bash -
       args:
         creates: /etc/apt/sources.list.d/nodesource.sources
 
-    - name: Installer Node.js (requis par CodeQL pour TypeScript)
+    - name: Installer Node.js
       ansible.builtin.apt:
-        name: [docker.io, docker-buildx]
+        name: nodejs
         state: present
 
-    - name: Installer Docker (build, Trivy, ZAP)
+    # ---------- Docker (build, Trivy, ZAP) ----------
+    - name: Installer Docker
       ansible.builtin.apt:
-        name: docker.io
+        name: [docker.io, docker-buildx]
         state: present
 
     - name: Docker démarré et activé au boot
@@ -53,6 +56,7 @@
         state: started
         enabled: true
 
+    # ---------- Utilisateur et runner ----------
     - name: Utilisateur dédié au runner
       ansible.builtin.user:
         name: "{{ runner_user }}"
@@ -69,19 +73,26 @@
         owner: "{{ runner_user }}"
         mode: "0755"
 
+    - name: Runner déjà enregistré ?
+      ansible.builtin.stat:
+        path: "{{ runner_dir }}/.runner"
+      register: runner_conf
+
     - name: Dernière version du runner
       ansible.builtin.uri:
         url: https://api.github.com/repos/actions/runner/releases/latest
         return_content: true
       register: runner_release
+      when: not runner_conf.stat.exists
 
-    - name: Télécharger et extraire
+    - name: Télécharger et extraire le runner
       ansible.builtin.unarchive:
         src: "https://github.com/actions/runner/releases/download/{{ runner_release.json.tag_name }}/actions-runner-linux-x64-{{ runner_release.json.tag_name | regex_replace('^v','') }}.tar.gz"
         dest: "{{ runner_dir }}"
         remote_src: true
         owner: "{{ runner_user }}"
         creates: "{{ runner_dir }}/config.sh"
+      when: not runner_conf.stat.exists
 
     - name: Dépendances système du runner
       ansible.builtin.command: ./bin/installdependencies.sh
@@ -89,12 +100,14 @@
         chdir: "{{ runner_dir }}"
         creates: "{{ runner_dir }}/.dependencies_ok"
       register: deps
+      when: not runner_conf.stat.exists
 
     - name: Marqueur dépendances
       ansible.builtin.file:
         path: "{{ runner_dir }}/.dependencies_ok"
         state: touch
-      when: deps.changed
+        mode: "0644"
+      when: deps is changed
 
     - name: Token d'enregistrement (valable 1h)
       ansible.builtin.uri:
@@ -106,9 +119,9 @@
         status_code: 201
       register: reg_token
       no_log: true
-      when: not (lookup('ansible.builtin.file', '/dev/null') is none) # placeholder, voir note
       delegate_to: localhost
       become: false
+      when: not runner_conf.stat.exists
 
     - name: Configurer le runner
       ansible.builtin.command: >
@@ -123,17 +136,27 @@
         creates: "{{ runner_dir }}/.runner"
       become_user: "{{ runner_user }}"
       no_log: true
+      when: not runner_conf.stat.exists
 
     - name: Installer le service systemd
       ansible.builtin.command: ./svc.sh install {{ runner_user }}
       args:
         chdir: "{{ runner_dir }}"
-        creates: "/etc/systemd/system/actions.runner.*.service"
+        creates: "{{ runner_dir }}/.service"
+      when: not runner_conf.stat.exists
 
     - name: Démarrer le service
       ansible.builtin.command: ./svc.sh start
       args:
         chdir: "{{ runner_dir }}"
       register: svc
-      changed_when: "'started' in svc.stdout"
-      failed_when: false
+      changed_when: "'started' in svc.stdout.lower()"
+      when: not runner_conf.stat.exists
+
+  handlers:
+    # Le groupe docker n'est pris en compte qu'au redémarrage du service du runner
+    - name: Redémarrer le runner
+      ansible.builtin.shell: ./svc.sh stop; ./svc.sh start
+      args:
+        chdir: "{{ runner_dir }}"
+        removes: "{{ runner_dir }}/.service"
