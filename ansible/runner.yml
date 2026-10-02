@@ -41,6 +41,17 @@
         name: nodejs
         state: present
 
+    - name: Installer Docker (build, Trivy, ZAP)
+      ansible.builtin.apt:
+        name: docker.io
+        state: present
+
+    - name: Docker démarré et activé au boot
+      ansible.builtin.systemd:
+        name: docker
+        state: started
+        enabled: true
+
     - name: Utilisateur dédié au runner
       ansible.builtin.user:
         name: "{{ runner_user }}"
