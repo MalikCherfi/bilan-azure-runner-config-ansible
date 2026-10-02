@@ -1,0 +1,72 @@
+name: Provision self-hosted runner
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  RG: mcherfiRG
+  NSG: vm-nsg
+  VAULT: githubactionskeyvaultmc
+  SECRET_NAME: private-ssh
+  RULE_NAME: allow-ssh-ci
+  INVENTORY: ansible/inventory.yml
+  PLAYBOOK: ansible/runner.yml
+  ANSIBLE_HOST_KEY_CHECKING: "False"
+  ANSIBLE_TIMEOUT: "10"
+
+jobs:
+  install-runner:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Récupérer la clé SSH depuis le Key Vault
+        run: |
+          mkdir -p ~/.ssh
+          az keyvault secret show --vault-name "$VAULT" --name "$SECRET_NAME" \
+            --query value -o tsv > ~/.ssh/pipeline-runner.pem
+          chmod 600 ~/.ssh/pipeline-runner.pem
+
+      - name: Installer Ansible
+        run: pip install --user ansible-core
+
+      - name: Ouvrir SSH pour l'IP de ce job
+        run: |
+          RUNNER_IP=$(curl -s https://api.ipify.org)
+          echo "::add-mask::$RUNNER_IP"
+          az network nsg rule create -g "$RG" --nsg-name "$NSG" \
+            -n "$RULE_NAME" --priority 100 --direction Inbound --access Allow \
+            --protocol Tcp --destination-port-ranges 22 \
+            --source-address-prefixes "$RUNNER_IP/32" -o none
+
+      - name: Attendre que la VM réponde
+        run: |
+          for i in $(seq 1 30); do
+            if ansible -i "$INVENTORY" runner -m ping >/dev/null 2>&1; then
+              echo "SSH OK"; exit 0
+            fi
+            echo "Tentative $i/30..."; sleep 10
+          done
+          echo "VM injoignable"; exit 1
+
+      - name: Lancer le playbook
+        env:
+          GITHUB_PAT: ${{ secrets.RUNNER_ADMIN_PAT }}
+        run: ansible-playbook -i "$INVENTORY" "$PLAYBOOK"
+
+      - name: Fermer SSH
+        if: always()
+        run: |
+          az network nsg rule delete -g "$RG" --nsg-name "$NSG" -n "$RULE_NAME" || true
+          shred -u ~/.ssh/pipeline-runner.pem || true
