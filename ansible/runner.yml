@@ -1,0 +1,97 @@
+- hosts: runner
+  become: true
+  vars:
+    github_repo: "MalikCherfi/bilan-azure-frontend"
+    runner_user: github-runner
+    runner_dir: /opt/actions-runner
+    runner_name: pipeline-runner
+    runner_labels: "azure,front"
+    github_pat: "{{ lookup('env', 'GITHUB_PAT') }}"
+
+  tasks:
+    - name: Paquets de base
+      ansible.builtin.apt:
+        name: [curl, tar, jq, git, ca-certificates, azcli]
+        update_cache: true
+
+    - name: Utilisateur dédié au runner
+      ansible.builtin.user:
+        name: "{{ runner_user }}"
+        shell: /bin/bash
+        create_home: true
+
+    - name: Dossier du runner
+      ansible.builtin.file:
+        path: "{{ runner_dir }}"
+        state: directory
+        owner: "{{ runner_user }}"
+        mode: "0755"
+
+    - name: Dernière version du runner
+      ansible.builtin.uri:
+        url: https://api.github.com/repos/actions/runner/releases/latest
+        return_content: true
+      register: runner_release
+
+    - name: Télécharger et extraire
+      ansible.builtin.unarchive:
+        src: "https://github.com/actions/runner/releases/download/{{ runner_release.json.tag_name }}/actions-runner-linux-x64-{{ runner_release.json.tag_name | regex_replace('^v','') }}.tar.gz"
+        dest: "{{ runner_dir }}"
+        remote_src: true
+        owner: "{{ runner_user }}"
+        creates: "{{ runner_dir }}/config.sh"
+
+    - name: Dépendances système du runner
+      ansible.builtin.command: ./bin/installdependencies.sh
+      args:
+        chdir: "{{ runner_dir }}"
+        creates: "{{ runner_dir }}/.dependencies_ok"
+      register: deps
+
+    - name: Marqueur dépendances
+      ansible.builtin.file:
+        path: "{{ runner_dir }}/.dependencies_ok"
+        state: touch
+      when: deps.changed
+
+    - name: Token d'enregistrement (valable 1h)
+      ansible.builtin.uri:
+        url: "https://api.github.com/repos/{{ github_repo }}/actions/runners/registration-token"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ github_pat }}"
+          Accept: application/vnd.github+json
+        status_code: 201
+      register: reg_token
+      no_log: true
+      when: not (lookup('ansible.builtin.file', '/dev/null') is none) # placeholder, voir note
+      delegate_to: localhost
+      become: false
+
+    - name: Configurer le runner
+      ansible.builtin.command: >
+        ./config.sh --unattended
+        --url https://github.com/{{ github_repo }}
+        --token {{ reg_token.json.token }}
+        --name {{ runner_name }}
+        --labels {{ runner_labels }}
+        --replace
+      args:
+        chdir: "{{ runner_dir }}"
+        creates: "{{ runner_dir }}/.runner"
+      become_user: "{{ runner_user }}"
+      no_log: true
+
+    - name: Installer le service systemd
+      ansible.builtin.command: ./svc.sh install {{ runner_user }}
+      args:
+        chdir: "{{ runner_dir }}"
+        creates: "/etc/systemd/system/actions.runner.*.service"
+
+    - name: Démarrer le service
+      ansible.builtin.command: ./svc.sh start
+      args:
+        chdir: "{{ runner_dir }}"
+      register: svc
+      changed_when: "'started' in svc.stdout"
+      failed_when: false
