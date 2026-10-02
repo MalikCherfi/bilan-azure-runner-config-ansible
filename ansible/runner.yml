@@ -14,6 +14,18 @@
         name: [curl, tar, jq, git, ca-certificates, acl]
         update_cache: true
 
+    - name: Outils requis par les workflows CI
+      ansible.builtin.apt:
+        name:
+          - build-essential # modules npm natifs (node-gyp)
+          - python3
+          - python3-pip
+          - unzip # extraction des binaires téléchargés par les actions (nuclei, etc.)
+          - zip
+          - zstd # actions/cache (sinon repli gzip lent) et bundle CodeQL
+          - xz-utils
+        state: present
+
     - name: Installer Azure CLI
       ansible.builtin.shell: curl -sL https://aka.ms/InstallAzureCLIDeb | bash
       args:
